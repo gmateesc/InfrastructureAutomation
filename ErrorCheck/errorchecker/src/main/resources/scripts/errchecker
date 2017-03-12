@@ -1,0 +1,454 @@
+#!/bin/bash
+
+#
+# Description:
+#
+#   This tool watches for events related to Tomcat log files 
+#
+#   It constantly checks /tmp/tomcat-logs/ for new lines in logs files, 
+#   and write the ones that contain the word "Exception" or "ERROR" to 
+#   /tmp/errchecker-log.txt. 
+#
+#   When it detects tomcat startup line ("INFO: Server startup in" ), 
+#   it must write
+#
+#      "TOMCAT IS STARTED" 
+#
+#   into /tmp/errchecker-log.txt, the number of exceptions 
+#   detected during the startup, and reset its exceptions
+#   counter.
+#
+#   If /tmp/errchecker-log.txt already exists, it appends its output.
+#
+#   To kill this tool, send a SIGINT or SIGTERM signal
+#
+# 
+# Examples:
+#
+# 1. Basic run 
+#
+#      errchecker
+#
+# 2. Debug run with a non-default directory for Tomcat log files:
+#
+#      errchecker  -x -d /var/log/tomcat7
+#
+#
+# Author 
+#  Gabriel Mateescu
+#  mateescu@acm.org
+#
+
+
+
+# Who am I
+this=$(basename $0) 
+this_dir=$(dirname $0)
+this_dir=$(readlink -m $this_dir)
+prefix=${this%%.*}
+
+# My PID
+me=$$
+
+
+# Error msg to look for
+#err_msg="Hello|INFO" 
+err_msg="Exception:|ERROR" 
+
+# Start message to look for
+start_msg="INFO: Server startup in"
+
+# Log file
+log_file=/tmp/${prefix}-log.txt
+
+# The prefix of the temp files created by this script
+errchecker_file_prefix=/tmp/errchecker
+
+
+#
+# Count of errors found in the Tomcat log file
+#
+err_count=0
+
+
+#
+# Program options
+#
+
+
+# Directory where to look for Tomcat log files
+# Override with -d command line option
+watch_dir="/tmp/tomcat-logs"
+
+
+# File pattern to watch for
+file_pattern="*"
+
+
+# Override with the -x command flag
+debug=0
+
+
+
+#
+# Usage
+#
+function usage { 
+    echo " Usage: " 1>&2; 
+    echo "    $this [-d watch_dir] [-l log_file] [-x]" 1>&2; 
+    echo "  "
+    echo " Defaults: "    1>&2; 
+    echo "         watch_dir  = $watch_dir"  1>&2; 
+    echo "         log_file   = $log_file" 1>&2; 
+    exit 1; 
+}
+
+
+
+
+#
+# Function to print debug messages in debug mode
+#
+function emit_msg {
+
+  msg=$1 
+  if [ "$msg" != "" ] && [ $debug -ne 0 ]; then 
+    echo -n "# "
+    echo -e "$msg"
+  fi
+
+} # emit_msg 
+
+
+
+#
+# Associative array to keep track of 
+# the last processing line for each 
+# Tomcat log file.
+#
+declare -A last_line_aa
+
+
+#
+# Function to get the last line that 
+# was processed from the Tomcat log 
+# file passed to the function
+#
+# Writes to stdout the number of the 
+# last processed line
+#
+function get_last_line {
+
+   tomcat_file=$(basename $1)
+
+   last_line=0
+   last_line_x=${last_line_aa[$tomcat_file]}
+   if [ "$last_line_x" != "" ]; then 
+     last_line=$last_line_x
+   fi
+
+   echo $last_line
+
+   return 0
+}
+
+
+
+#
+# Set the last line that was processed 
+# for the Tomcat log file passed as 
+# an argument
+#
+function set_last_line {
+
+   tomcat_file=$(basename $1)
+   last_line=$2
+
+   last_line_aa[$tomcat_file]=$last_line
+
+   return 0
+}
+
+
+
+
+
+#
+# Clean up processes on exit
+#
+function cleanup {
+
+    #
+    # Kill all processes in my group
+    #
+    emit_msg "$$ Killing processes in group $me"
+    kill -9 -$me
+
+
+} # cleanup 
+
+
+trap cleanup SIGINT SIGTERM
+
+
+
+
+
+
+#
+# Process changes to a Tomcat log file
+#
+#
+#  Write into /tmp/errchecker-log.txt as follows:
+#
+#  1. Write the lines that contain the word
+#     "Exception:" or "ERROR" to /tmp/errchecker-log.txt. 
+#     and increment the exception count 
+#
+#  2. Write
+#
+#      "TOMCAT IS STARTED" 
+#    
+#    when a tomcat startup line is detected, i.e., 
+#    a line containing "INFO: Server startup in" 
+#    Write also the number of exceptions detected 
+#    during the startup, and reset the exceptions
+#    counter.
+#
+function process_file {
+
+  # The Tomcat log file to process
+  file=$1
+
+  #
+  # Compute the first line to process for this Tomcat 
+  # file using the last_processed line for this file
+  #
+
+  emit_msg "   Lines already processed and to be processed"
+
+  last_processed=$(get_last_line $file)
+  emit_msg "     last_processed = $last_processed"
+  first=$(( last_processed + 1 ))
+  emit_msg "     first_to_process = $first"
+
+
+  #
+  # Get last line to process: the last line in the file
+  #
+  last=$(wc -l $file | awk '{print $1}')
+  emit_msg "     last_to_process = $last"
+
+
+  #
+  # Search for error and startup messages in the 
+  # Tomcat file between $first and $last line
+  #
+
+  if [ $first -gt $last ]; then 
+     # File has been overwritten, restart 
+     first=1 
+     set_last_line $file $last
+     return 0
+  fi
+
+
+  #
+  # Inspect lines from $first to $last in Tomcat logfile $file 
+  #
+
+  # Set IFS to be a line separatore
+  OLDIFS=$IFS
+  IFS=$'\n'
+  l=0
+  lines=$(cat $file 2>/dev/null | sed -n ${first},${last}p)
+  for line in $lines; do 
+     (( l = l + 1 ))
+
+     if [ $l -eq 1 ]; then 
+       emit_msg "   Lines to be processed:";
+     fi
+
+     emit_msg "   ${l}: $line";
+
+     #
+     # Check if this line contains an error msg
+     #
+     error_line=$(echo $line | egrep "$err_msg" >/dev/null; echo $?)
+     if [ $error_line -eq 0 ]; then 
+         # Write the error line to the log file and increment error count
+         (( err_count = err_count + 1 ))    
+         emit_msg "   ==> process_file: Found error number $err_count in line $line"  
+         emit_msg "       append error line: $line to log file $log_file"
+         echo $line  >> $log_file
+     fi
+
+
+     #
+     # Check if this line contains a startup msg
+     #
+     startup_line=$(echo $line | egrep "$start_msg" >/dev/null; echo $?)
+     if [ $startup_line -eq 0 ]; then 
+         # Write the startup line to the log file and reset error count
+         emit_msg "   ==> process_file: Found startup line: $line" 
+         emit_msg "       append startup line: $line to log file $log_file"
+         echo "TOMCAT IS STARTED Number of exceptions detected during the startup is $err_count"  >> $log_file
+         err_count=0
+     fi
+
+  done
+
+  # Restore saved IFS
+  IFS=$OLDIFS
+
+
+  #
+  # Update the last_processed line number in $file
+  #
+  set_last_line $file $last
+
+
+  # Set exit code to $err_count
+  return $err_count
+
+
+} # process_file
+
+
+
+
+
+#
+# Process notification events
+#
+function process_notify {
+
+  while read path; do 
+
+    emit_msg " "
+    emit_msg "1. Enter process_notify for event: $path"
+
+    # Remove info before file_path
+    #   path = EVENT1,EVENT2 file_path
+    file=$(echo ${path#* })
+
+    # Get file name without path
+    file_name=$(basename $file)
+
+
+    #
+    # Process the lines in $file
+    #
+    if [ -f $file ]; then 
+
+       emit_msg "2. In process_notify file_name=$file_name can be read"
+
+
+       #
+       # Perform process_file on $file 
+       #
+
+       #logger     $this $path;
+       emit_msg "3. Perform process_file on file $file";
+
+       # Run process_file on file $file
+       process_file $file
+
+       emit_msg "4. Finished process_file with err_count=$err_count for $path"
+
+
+    fi   # -f file
+
+  done  # while read path
+
+  echo "END process_notify"
+
+} # process_notify 
+
+
+
+
+
+
+
+#
+# Get command-line options
+#
+while getopts "d:l:X:xh" opt; do
+    case "${opt}" in
+        d)
+            watch_dir=${OPTARG}
+            ;;
+        l)
+            log_file=${OPTARG}
+            ;;
+        X)
+            debug=1
+            file_src=${OPTARG}
+            ;;
+        x)
+            debug=1
+            ;;
+        h)
+            usage
+            ;;
+    esac
+done
+shift $((OPTIND-1))
+
+
+#emit_msg "   watch_dir    = $watch_dir"
+#emit_msg "   file_pattern = $file_pattern"
+
+
+
+#############################################################
+#
+#                     Main program
+#
+#############################################################
+
+
+#
+# Watch for events on $watch_dir/$file_pattern, default being
+#      /tmp/tomcat-logs/*   
+# and forward events to process_notify for processing
+#
+
+
+#
+# 1. Make sure the watched directory exists
+#
+mkdir -p $watch_dir
+touch $log_file
+
+#
+# 2. Make sure the inotifywait tool is found
+#    This tool is part of the inotify-tools package
+#    so it can be installed with 
+#       apt-get install inotify-tools 
+#    or 
+#       yum install inotify-tools 
+#
+rc=$(which inotifywait 2>/dev/null 1>&2; echo $?)
+if [ $rc -ne 0 ]; then 
+  echo "ERROR: could not find inotifywait" 
+  echo "       Check that the inotify-tools packages is installed " 
+  exit 1
+fi
+
+
+#
+# 3. Launch monitoring of the directory $watch_dir 
+#
+inotifywait -m -e modify -e close_write -e moved_to --format '%e %w/%f' $watch_dir 2>/dev/null | process_notify &
+emit_msg "0. Launched inotifywait process for files $watch_dir/$file_pattern"
+
+
+#
+# 4. Run as long as child processes exist, or until killed 
+#
+wait
+
+
+

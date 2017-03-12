@@ -1,0 +1,25 @@
+#!/bin/bash
+
+dir=$(dirname $0) 
+
+# Run maven
+cd $dir/../errorchecker
+mvn  clean package assembly:single
+cd -
+
+# Check
+tar ztvf errorchecker/target/errorchecker.tar.gz
+
+# Build tar with everything
+tar cvf errorchecker_src.tar errorchecker libexec
+
+# Back it up
+cp -p errorchecker_src.tar $HOME
+
+
+
+
+
+
+
+

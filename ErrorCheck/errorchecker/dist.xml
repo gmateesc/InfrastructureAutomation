@@ -1,0 +1,39 @@
+<assembly>
+
+  <id>dist</id>
+  <formats>
+    <format>tar.gz</format>
+  </formats>
+
+  <fileSets>
+
+    <fileSet>
+      <directory>${project.basedir}/src/main/resources/scripts</directory>
+      <outputDirectory>bin</outputDirectory>
+      <useDefaultExcludes>true</useDefaultExcludes>
+      <fileMode>755</fileMode>
+    </fileSet>
+
+
+    <fileSet>
+      <directory>${project.basedir}/src/main/resources/docs</directory>
+      <outputDirectory>docs</outputDirectory>
+      <useDefaultExcludes>true</useDefaultExcludes>
+    </fileSet>
+
+
+    <fileSet>
+      <directory>${project.basedir}</directory>
+      <includes>
+        <include>README*</include>
+        <include>LICENSE*</include>
+        <include>NOTICE*</include>
+        <include>*.xml</include>
+      </includes>
+      <useDefaultExcludes>true</useDefaultExcludes>
+    </fileSet>
+
+
+  </fileSets>
+
+</assembly>

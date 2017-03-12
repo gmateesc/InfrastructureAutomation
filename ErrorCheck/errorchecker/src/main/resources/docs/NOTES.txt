@@ -1,0 +1,697 @@
+
+1. The errchecker script
+     1.1 The main program
+     1.2 The process_notify function
+     1.3 The process_file function
+     1.4 The get_last_line and set_last_line functions
+     1.5 Graceful program exit
+     1.6 Options for power users
+
+
+2. The maven tool
+     2.1 The file pom.xml
+     2.2 The file dist.xml
+     2.3 Example run
+           2.3.1 The source directory tree
+           2.3.2 Running maven
+           2.3.3 Checking the package created by maven
+---
+
+
+
+
+1. The errchecker script
+------------------------
+
+
+I developed the errchecker script using bash. The detection of changes 
+to the Tomcat log files is done using the inotifywait tool.
+
+
+1.1 The main program
+--------------------
+
+The main program in errchecker launches the process pipe:
+
+
+  watch_dir="/tmp/tomcat-logs"
+
+  inotifywait -m -e close_write -e moved_to --format '%e %w%f' $watch_dir 2>$dbg_file | process_notify &
+
+  wait
+
+
+that monitors the directory $watch_dir (using "inotifywait -m" ) and sends the notification 
+events to the process_notify bash funcion described in the next subsection. 
+
+The process tree looks like this:
+
+  $ errchecker  &
+  [1] 17567
+
+  $ pstree 17567
+  errchecker─┬─errchecker
+             └─inotifywait
+
+
+where the parent errchecker is in wait and the child is in process_notify. 
+
+The bash function process_notify processes the file change notifications recevied 
+from inotifywait and is described in the next subsection.
+
+The main program runs continuously until intotifywait exits or until the parent 
+errchecker process is terminated. 
+
+---
+ 
+
+
+
+1.2 The process_notify function
+-------------------------------
+
+
+The skeleton of the process_notify function is
+
+  function process_notify {
+
+    while read path; do 
+
+      file=$(echo ${path#* })
+      file_name=$(basename $file)
+
+      if [ -r $file ]; then 
+         process_file $file
+      fi   
+    done  
+
+} 
+
+The fuunction receives from inotifywait the notification with the 
+format defined bey the line:
+
+  inotifywait -m -e close_write -e moved_to --format '%e %w%f' $watch_dir 2>$dbg_file | process_notify &
+
+where the format '%e %w%f' means the event list followed by the full path of the file name 
+on which the event close_write or moved_to occurs.
+
+An example notification event with the '%e %w%f' format is
+
+   CLOSE_WRITE,CLOSE /tmp/tomcat-logs/catalina.out
+
+The process_notify function extracts the file name from the notification 
+even and then invokes the process_file function.
+
+---
+
+
+
+
+
+1.3 The process_file function
+-----------------------------
+
+
+This function processes changes to a Tomcat log file 
+passed as an argument and writes into the output file 
+
+   /tmp/errchecker-log.txt 
+
+as follows
+
+
+  1. Write the lines that contain the word
+     "Exception" or "ERROR" and increments 
+     the error counter err_count;
+ 
+
+  2. Writes
+
+      "TOMCAT IS STARTED" 
+    
+     when a tomcat startup line is detected, i.e., 
+     a line containing the text "INFO: Server startup" 
+     Write also the number of exceptions detected 
+     during the startup, and reset the error counter.
+
+
+  3. The function returns the value of the err_count 
+     error counter.
+
+
+
+The code of process_file is:
+
+
+  err_count=0
+
+  function process_file {
+
+    # The Tomcat log file to process
+    file=$1
+
+    # Compute the first line to process for this Tomcat 
+    # file using the last_processed line for this file
+    last_processed=$(get_last_line $file)
+    first=$(( last_processed + 1 ))
+
+
+    last=$(wc -l $file | awk '{print $1}')
+
+
+    #
+    # Search for error and startup messages in the 
+    # Tomcat file between $first and $last line
+    #
+    if [ $first -gt $last ]; then 
+       # File has been overwritten, restart 
+       first=1 
+       set_last_line $file $last
+       return 0
+    fi
+
+
+    #
+    # Inspect lines from $first to $last in Tomcat logfile $file 
+    #
+
+    # Set IFS to be a line separatore
+    OLDIFS=$IFS
+    IFS=$'\n'
+    l=0
+    lines=$(cat $file | sed -n ${first},${last}p)
+    for line in $lines; do 
+       (( l = l + 1 ))
+
+       #
+       # Check if this line contains an error msg
+       #
+       error_line=$(echo $line | egrep "$err_msg" >/dev/null; echo $?)
+       if [ $error_line -eq 0 ]; then 
+           # Write the error line to the log file and increment error count
+           (( err_count = err_count + 1 ))    
+           echo $line  >> $log_file
+       fi
+
+
+       #
+       # Check if this line contains a startup msg
+       #
+       startup_line=$(echo $line | egrep "$start_msg" >/dev/null; echo $?)
+       if [ $startup_line -eq 0 ]; then 
+           # Write the startup line to the log file and reset error count
+           echo "TOMCAT IS STARTED Number of exceptions detected during the startup is $err_count"  >> $log_file
+           err_count=0
+       fi
+
+    done
+
+    # Restore saved IFS
+    IFS=$OLDIFS
+
+
+    # Update the last_processed line number in $file
+    set_last_line $file $last
+
+
+    # Set exit code to $err_count
+    return $err_count
+  } 
+
+
+---
+
+
+
+
+
+
+1.4 The get_last_line and set_last_line functions
+-------------------------------------------------
+
+When a notification is received from inotifywait 
+about lines being appened to a Tomcat log file, the 
+errchecker program must inspect only the newly added lines. 
+
+To keep track of which lines in a Tomcat log file have 
+been already inspected as a result of previous 
+notification events, I use
+
+  o the associative array last_line_aa for which 
+    the key is the name of a Tomcat log file, e.g., 
+
+      last_line_aa[catalina.out]
+
+  o the functions get_last_line and set_last_line 
+    to get and respectively set the last line 
+    processed for a file, by reading and 
+    respectively writing the associative array.  
+    
+ 
+
+The code in errchecker is the following:
+
+
+  declare -A last_line_aa
+
+  function get_last_line {
+
+     tomcat_file=$(basename $1)
+
+     last_line=0
+
+     # Using assoc array
+     last_line_x=${last_line_aa[$tomcat_file]}
+     if [ "$last_line_x" != "" ]; then
+       last_line=$last_line_x
+     fi
+
+     echo $last_line
+
+     return 0
+  }
+
+
+
+  function set_last_line {
+
+     tomcat_file=$(basename $1)
+     last_line=$2
+
+     # Using assoc array
+     last_line_aa[$tomcat_file]=$last_line
+
+     return 0
+  }
+
+---
+
+
+
+
+
+
+1.5 Graceful program exit
+-------------------------
+
+
+To kill the entire process tree described in section 1.1
+
+  errchecker─┬─errchecker
+             └─inotifywait
+
+I wrote the cleanup function which cleans the process in the 
+group of the parent errchecker program:
+ 
+  function cleanup {
+
+    #
+    # Kill all processes in my group
+    #
+    emit_msg "Killing processes in group $me"
+    kill -9 -$me
+  }
+
+This function is invoked upon reception of SIGINT and SIGTERM 
+thanks to the line:
+
+   trap cleanup SIGINT SIGTERM
+
+---
+
+
+
+
+1.6 Options for power users
+---------------------------
+
+
+To make the errchecker program flexible, I added options that 
+allow to 
+
+1. override the directory where errchecker looks for 
+   Tomcat log files: the -d options
+
+2. overrtise the path of the log file where errchecker 
+   writes the result of examining the Tomcat logs: 
+   the -l option
+
+3. Print debug information: the -x option. 
+
+
+To see these options, run
+
+  $ errchecker -h
+   Usage:
+      errchecker [-d watch_dir] [-l log_file] [-x]
+
+   Defaults:
+           watch_dir  = /tmp/tomcat-logs
+           log_file   = /tmp/errchecker-log.txt
+---
+
+
+
+
+
+
+
+
+2. The maven tool
+-----------------
+
+
+To build the tar.gz file, I used the plugin 
+
+  maven-assembly-plugin 
+
+with the assembly descriptor file dist.xml, 
+
+
+After setting up pom.xml and dist.xml, as explained below, 
+I have run Maven with the command 
+
+  $ mvn  clean package assembly:single
+
+Thus has produced the file errorchecker.tar.gz that contains the 
+required files in the required layout. 
+
+
+
+
+2.1 The file pom.xml
+--------------------
+
+Tthe pom.xml file contains:
+
+
+  $ cat pom.xml
+
+  <project>
+
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>gabriel.mateescu.projects</groupId>
+    <artifactId>errorchecker</artifactId>
+    <version>1.0</version>
+    <name>errorchecker</name>
+    ...
+
+    <build>
+       <plugins>
+        
+         <!-- Trick to prevent running the jar plugin for a non-Java project -->
+         <plugin>
+           <artifactId>maven-jar-plugin</artifactId>
+           <version>2.3.1</version>
+           <executions>
+             <execution>
+               <id>default-jar</id>
+               <phase>none</phase>
+             </execution>
+           </executions>
+         </plugin>
+
+
+         <plugin>
+           <artifactId>maven-assembly-plugin</artifactId>
+           <version>2.5.3</version>
+
+           <configuration>
+
+             <descriptors>
+               <descriptor>dist.xml</descriptor>
+             </descriptors>
+
+             <finalName>${project.name}</finalName>
+             <appendAssemblyId>false</appendAssemblyId>
+
+           </configuration>
+  
+           <executions>
+             <execution>
+               <id>build_scripts_docs</id>
+               <phase>package</phase>
+               <goals>
+                 <goal>single</goal>
+               </goals>
+             </execution>
+           </executions>
+
+         </plugin>
+
+      </plugins>
+    </build>
+
+  </project>
+
+---
+
+
+To prevent the default invocation of the plugin maven-jar-plugin, I defined 
+its execution phase as "none". 
+
+Otherwise, the maven-jar-plugin to generate a jar file would be 
+unnecessarily invoked. 
+
+
+----
+
+
+
+To ensure platform-independent file conding I set the project property:
+project.build.sourceEncoding
+
+
+  $ cat pom.xml
+
+  <project>
+
+    <properties>
+      <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    ...
+
+
+  </project>
+
+
+---
+
+
+
+2.2 The file dist.xml
+---------------------
+
+
+The assembly descriptor file defines how the assembly of the .tar.gz file is done:
+
+  $ cat dist.xml
+  <assembly>
+
+    <id>dist</id>
+
+    <formats>
+      <format>tar.gz</format>
+    </formats>
+
+    <fileSets>
+
+      <fileSet>
+        <directory>${project.basedir}/src/main/resources/scripts</directory>
+        <outputDirectory>bin</outputDirectory>
+        <useDefaultExcludes>true</useDefaultExcludes>
+        <fileMode>755</fileMode>
+      </fileSet>
+
+      <fileSet>
+        <directory>${project.basedir}/src/main/resources/docs</directory>
+        <outputDirectory>docs</outputDirectory>
+        <useDefaultExcludes>true</useDefaultExcludes>
+      </fileSet>
+
+      <fileSet>
+        <directory>${project.basedir}</directory>
+        <includes>
+          <include>README*</include>
+          <include>LICENSE*</include>
+          <include>NOTICE*</include>
+          <include>*.xml</include>
+        </includes>
+        <useDefaultExcludes>true</useDefaultExcludes>
+      </fileSet>
+
+
+    </fileSets>
+
+  </assembly>
+
+
+where 
+
+o the <formats> element defines the archive format as tar.gz (compressed tar)
+
+
+o I have defined rules for three fileSet directories
+
+
+   1. the scripts directory
+
+        ${project.basedir}/src/main/resources/scripts
+
+       which contains the errchecker script, is copied to 
+       the bin directory and the script gets the mode 
+       755 to make it executable;
+
+
+   2. The docs directory
+
+         ${project.basedir}/src/main/resources/docs
+
+       which is copied to the docs directory; 
+
+
+   3. The base directory
+
+         ${project.basedir}
+
+      which contains the Maven pom.xml and dist.xml files 
+      as well as customary doc files such as README*, 
+      is copied to the root directory of the assembly.
+
+----
+
+
+    
+2.3 Example run
+---------------
+
+
+2.3.1 The source directory tree
+-------------------------------
+
+After going to the root of the source directory tree, I see 
+the following layout of the Maven source tree
+
+
+
+  $ tree
+  .
+  +-- dist.xml
+  +-- pom.xml
+  +-- README.txt
+  +-- src
+      +-- main
+          +-- resources
+              +-- docs
+                  +-- NOTES.txt
+              +-- scripts
+                  +-- errchecker
+
+  5 directories, 5 files
+
+---
+
+
+
+2.3.2 Running maven
+-------------------
+
+In the above directory I run mvn to create the assembly package (.tar.gz) 
+as follows:
+
+
+
+1. Check Maven version
+
+    $ mvn -version | head -1
+    Apache Maven 3.0.3 (r1075438; 2011-02-28 18:31:09+0100)
+
+    $ mvn -version
+    Apache Maven 3.0.4
+    Maven home: /usr/share/maven
+    Java version: 1.6.0_45, vendor: Sun Microsystems Inc.
+    Java home: /usr/java/jdk1.6.0_45/jre
+    Default locale: en_US, platform encoding: UTF-8
+    OS name: "linux", version: "3.2.0-4-amd64", arch: "amd64", family: "unix"
+
+
+
+2. Build the tar.gz package with Maven:
+
+
+    $ mvn  clean package assembly:single
+    [INFO] Scanning for projects...
+    [INFO]                                                                         
+    [INFO] ------------------------------------------------------------------------
+    [INFO] Building errorchecker 1.0
+    [INFO] ------------------------------------------------------------------------
+    [INFO] 
+    [INFO] --- maven-clean-plugin:2.4.1:clean (default-clean) @ errorchecker ---
+    [INFO] Deleting /home/gabriel/Tomcat_err_checker/My_code/errorchecker/target
+    [INFO] 
+    [INFO] --- maven-resources-plugin:2.4.3:resources (default-resources) @ errorchecker ---
+    [INFO] Using 'UTF-8' encoding to copy filtered resources.
+    [INFO] Copying 2 resources
+    [INFO] 
+    [INFO] --- maven-compiler-plugin:2.3.2:compile (default-compile) @ errorchecker ---
+    [INFO] No sources to compile
+    [INFO] 
+    [INFO] --- maven-resources-plugin:2.4.3:testResources (default-testResources) @ errorchecker ---
+    [INFO] Using 'UTF-8' encoding to copy filtered resources.
+    [INFO] skip non existing resourceDirectory \
+             /home/gabriel/Tomcat_err_checker/My_code/errorchecker/src/test/resources
+    [INFO] 
+    [INFO] --- maven-compiler-plugin:2.3.2:testCompile (default-testCompile) @ errorchecker ---
+    [INFO] No sources to compile
+    [INFO] 
+    [INFO] --- maven-surefire-plugin:2.7.2:test (default-test) @ errorchecker ---
+    [INFO] No tests to run.
+    [INFO] Surefire report directory: /home/gabriel/Tomcat_err_checker/My_code/errorchecker/target/surefire-reports
+
+    -------------------------------------------------------
+     T E S T S
+    -------------------------------------------------------
+    There are no tests to run.
+
+    Results :
+
+    Tests run: 0, Failures: 0, Errors: 0, Skipped: 0
+
+    [INFO] 
+    [INFO] --- maven-assembly-plugin:2.5.3:single (build_scripts_docs) @ errorchecker ---
+    [INFO] Reading assembly descriptor: dist.xml
+    [INFO] Building tar: /home/gabriel/Tomcat_err_checker/My_code/errorchecker/target/errorchecker.tar.gz
+    [INFO] 
+    [INFO] --- maven-assembly-plugin:2.5.3:single (default-cli) @ errorchecker ---
+    [INFO] Reading assembly descriptor: dist.xml
+    [INFO] Building tar: /home/gabriel/Tomcat_err_checker/My_code/errorchecker/target/errorchecker.tar.gz
+    [WARNING] Artifact gabriel.mateescu.projects:errorchecker:tar.gz:1.0 already attached to project, ignoring duplicate
+    [INFO] ------------------------------------------------------------------------
+    [INFO] BUILD SUCCESS
+    [INFO] ------------------------------------------------------------------------
+    [INFO] Total time: 5.764s
+    [INFO] Finished at: Wed Apr 01 04:06:04 CEST 2015
+    [INFO] Final Memory: 7M/81M
+    [INFO] ------------------------------------------------------------------------
+
+----
+
+
+
+2.3.3 Checking the package created by maven
+-------------------------------------------
+
+After running mvn, the errorchecker.tar.gz is created and it contains 
+the required files:
+
+  $ tar ztvf target/errorchecker.tar.gz 
+  drwxr-xr-x  0 gabriel staff       0 Mar 30 14:26 errorchecker/bin/
+  -rw-r--r--  0 gabriel staff      17 Mar 30 14:26 errorchecker/bin/errchecker
+  drwxr-xr-x  0 gabriel staff       0 Mar 30 11:05 errorchecker/docs/
+  -rw-r--r--  0 gabriel staff      12 Mar 30 11:05 errorchecker/docs/NOTES.txt
+  -rw-r--r--  0 gabriel staff     832 Mar 30 14:41 errorchecker/dist.xml
+  -rw-r--r--  0 gabriel staff    1323 Mar 30 19:21 errorchecker/pom.xml
+  -rw-r--r--  0 gabriel staff     286 Mar 30 19:32 errorchecker/README
+
+

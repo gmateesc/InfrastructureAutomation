@@ -1,0 +1,67 @@
+<project>
+
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>gabriel.mateescu.projects</groupId>
+  <artifactId>errorchecker</artifactId>
+  <version>1.0</version>
+  <name>errorchecker</name>
+
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+
+
+    <plugins>
+
+
+      <!-- Trick to prevent running the jar plugin for a non-Java project -->
+      <plugin>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>2.3.1</version>
+        <executions>
+          <execution>
+            <id>default-jar</id>
+            <phase>none</phase>
+          </execution>
+        </executions>
+      </plugin>
+
+
+
+      <plugin>
+
+        <artifactId>maven-assembly-plugin</artifactId>
+        <version>2.5.3</version>
+
+        <configuration>
+
+          <descriptors>
+            <descriptor>dist.xml</descriptor>
+          </descriptors>
+
+          <finalName>${project.name}</finalName>
+          <appendAssemblyId>false</appendAssemblyId>
+
+        </configuration>
+  
+        <executions>
+          <execution>
+            <id>build_scripts_docs</id>
+            <phase>package</phase>
+            <goals>
+              <goal>single</goal>
+            </goals>
+          </execution>
+        </executions>
+
+      </plugin>
+
+      </plugins>
+  </build>
+  
+</project>
+
+
