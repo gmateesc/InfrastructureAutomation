@@ -1,0 +1,8 @@
+[webservers]
+# Specify host params with name=value
+#testserver ansible_connection=local
+#testserver ansible_connection=ssh ansible_ssh_host: 127.0.0.1 ansible_ssh_port: 22 
+serverB ansible_ssh_host=127.0.0.1 ansible_ssh_port=22
+#testserver ansible_ssh_host=127.0.0.1 ansible_ssh_port=22 ansible_become_pass=secret
+
+

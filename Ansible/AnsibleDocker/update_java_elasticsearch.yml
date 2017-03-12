@@ -1,0 +1,64 @@
+#
+#
+# To run all tasks:
+#
+#  ansible-playbook   -i localhost,  update_java_elasticsearch.yml
+#
+#
+# To run only OS update:
+#
+#  ansible-playbook   -i localhost, --tags='update'  update_java_elasticsearch.yml
+#
+#
+# To run only OS update and Java install:
+#
+#  ansible-playbook   -i localhost, --tags='java'  update_java_elasticsearch.yml
+#
+#
+---
+- hosts: localhost
+  connection: local
+  become: no
+   
+  tasks:
+
+  - name: Pull the centos:latest image
+    docker_image:
+      repository:  "centos:latest"
+      name:        "centos"
+      state:       present
+    tags: 
+    - update
+    - java
+    - elasticsearch
+
+
+  - name: Build an image with OS patched
+    docker_image:
+      path: ./files/AGT
+      repository: "centos"
+      name:  "agt/centos"
+      state: present
+      push: yes
+    tags: 
+    - update
+    - java
+    - elasticsearch
+
+
+  - name: Build an image with Java
+    shell: docker build -t agt/centos-java:latest ./files/AGT_java
+    register: res
+    changed_when: "'Running in' in res.stdout"
+    tags: 
+    - java
+    - elasticsearch
+    
+
+  - name: Build an image with ElasticSearch
+    shell: docker build -t agt/centos-elasticsearch:latest ./files/AGT_elasticsearch
+    register: res
+    changed_when: "'Running in' in res.stdout"
+    tags: 
+    - elasticsearch
+

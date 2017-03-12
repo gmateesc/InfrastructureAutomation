@@ -1,0 +1,19 @@
+---
+
+- hosts: localhost
+
+  become: no
+
+  tasks:
+
+    - name: Write text to a file
+      local_action: 
+        module: copy
+        dest: ./here_text.txt
+        content: |
+          This is the first line 
+          This is the second line
+
+
+
+

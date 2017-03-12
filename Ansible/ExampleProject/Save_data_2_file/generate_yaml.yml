@@ -1,0 +1,28 @@
+---
+#
+# https://github.com/ansible/ansible/issues/11189
+#
+- hosts: localhost
+
+  become: no
+
+  vars:
+    data: [{'key': 'value', 'day': 'Sunday'}]
+
+  tasks:
+    - name: "The right way: use msg: preserves spaces"
+      debug:
+        msg: "{{data|to_nice_yaml}}"
+
+    - name: "The wrong way: use msg= loses spaces"
+      debug: msg="{{data|to_nice_yaml}}"
+
+    - name: "Save hash to yaml file"
+      local_action: 
+        module: copy
+        content: "{{ data | to_nice_yaml }}" 
+        dest: ./data.yaml
+
+
+
+

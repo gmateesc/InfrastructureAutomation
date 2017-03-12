@@ -1,0 +1,11 @@
+---
+- name: copy nginx config file
+  # Path to source file is relative to the dir where the playbook resides
+  copy: src=files/nginx.conf dest=/tmp/default
+- name: Debug
+  #debug: var=role_name    # defined in roles/logstash/vars/
+  #debug: var=cluster_name # defined in the playbook and passed to the role
+  debug: msg="role_name={{ role_name }} cluster_name={{ cluster_name }}"
+
+
+

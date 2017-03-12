@@ -1,0 +1,68 @@
+---
+- name: Execute roles/logstash/tasks/main.yml and other tasks
+
+  #
+  # 1. Host group
+  #
+  #   NOTE: If group_vars/HOST_GROUP[.yml] exists, it will be loaded
+  #
+  hosts: webservers
+  #remote_user: gabriel
+  #become: true
+
+
+  #
+  # 2. Roles: a role includes tasks, files, and vars
+  #           all host in the above host group will have this role
+  roles: 
+    - role: logstash
+      var_foo: foo_val # var passed to role; scope is the role tasks and this playbook
+
+
+  #
+  # 3. Define playbook-level vars to be used by the tasks
+  #
+
+  #
+  # 3.1 Load var files with vars_files: or include_vars:
+  #
+  #vars_files:
+  #  - vars/main.yml
+
+  #
+  # 3.2 Executed before all tasks
+  #
+  pre_tasks:
+    - include_vars: vars/main.yml
+
+
+  #
+  # 4. Run tasks
+  #
+  tasks:
+
+    #
+    # 4.1 First the role-specific tasks are executed
+    #
+
+    # Executed by roles/logstash/tasks/main.yml
+    # - name: copy nginx config file 
+    #   # Path to source file is relative to the dir where the playbook resides
+    #   copy: src=files/nginx.conf dest=/tmp/default
+
+
+    #
+    # 4.2 Next, the tasks listed here are executed
+    #
+    - include: tasks/main.yml # included task can access all previous vars, except those passed to a role
+
+    # Moved the debug task to tasks/main.yml
+    # - name: Debug
+    #   #debug: var=org          # defined in group_vars/all.yml,       included with all host groups
+    #   #debug: var=admin_pass   # defined in group_vars/webserver.yml, included with host group webservers
+    #   #debug: var=role_name    # defined in roles/logstash/vars,      included with role logstash
+    #   #debug: var=cluster_name # defined in vars/main.yml,            included with vars_files or include_vars
+    #   debug:  >
+    #     msg="org={{ org }} cluster_name={{ cluster_name }} role_name={{ role_name }} admin_pass={{ admin_pass }}"
+
+
